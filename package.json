@@ -1,0 +1,29 @@
+{
+  "name": "repo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://x-access-token:ghs_13473_eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhdXRobmQiLCJjdHgiOiJadkZNd09BWWVwWk44Tl9aT2JpZGstVkFSOFBwc29PdnFQMUt5ajdfZ3BMeHV4WVZMWFIzNUFidGhBIiwiZXhwIjoxNzkzNzk2NjA0LCJpYXQiOjE3OTM3OTMwMDQsImlzcyI6ImdpdGh1YiIsImp0aSI6ImY2NDY3MjM2LTRkOWYtNGI4NS1iNTRlLTJiYWNlOTJkNmFjZCIsInZlciI6M30.gCmGNmV87cNpJKDyjwzS9PT2gtckqhLrChgZ24y77orhDpt9_DOeatswxEXnyd0Ai_ORM6tHbsW4LD6CQGHz2g@github.com/tatte13/CSTV-Scoreboard.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/tatte13/CSTV-Scoreboard/issues"
+  },
+  "homepage": "https://github.com/tatte13/CSTV-Scoreboard#readme",
+  "dependencies": {
+    "@netlify/database": "^2.0.1",
+    "drizzle-orm": "^1.0.0-beta.22"
+  },
+  "devDependencies": {
+    "@netlify/functions": "^6.0.3",
+    "drizzle-kit": "^1.0.0-beta.22"
+  }
+}
