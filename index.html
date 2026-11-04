@@ -429,7 +429,8 @@ body.panel-open #openPanel{display:none}
 
   <button class="btn wide on" data-act="obsMode">Modalità OBS</button>
   <button class="btn wide" style="margin-top:6px" data-act="copyUrl">Copia URL per OBS (?obs=true)</button>
-  <p class="hint">Esc esce dalla Modalità OBS. Parametri URL opzionali: <code>?obs=true&amp;skin=euro|tv24|classic&amp;theme=auto|dark|light&amp;lite=1</code></p>
+  <p class="hint" id="syncState">● Connessione…</p>
+  <p class="hint">Esc esce dalla Modalità OBS. Parametri URL opzionali: <code>?obs=true&amp;room=nome&amp;skin=euro|tv24|classic&amp;theme=auto|dark|light&amp;lite=1</code></p>
 
   <h3>Schermate</h3>
   <div class="grid3">
@@ -579,6 +580,13 @@ const truthy     = k => ['true', '1', 'yes'].includes((params.get(k) || '').toLo
 const FORCED_OBS = truthy('obs');
 const LITE       = truthy('lite');                 // ?lite=1 → niente effetti continui (massime prestazioni)
 const KEY        = 'cestistica.scoreboard.v1';
+/* Stanza di sincronizzazione remota (?room=nome): regia e OBS devono usare la stessa */
+const ROOM       = ((params.get('room') || 'main').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 40)) || 'main';
+/* Se la pagina è aperta da file locale o da un altro dominio, usa comunque il server Netlify */
+const ORIGIN     = /netlify\.app$|^localhost$|^127\./.test(location.hostname) ? '' : 'https://cstvscoreboard.netlify.app';
+const API        = ORIGIN + '/api/state?room=' + encodeURIComponent(ROOM);
+let skew = 0;                                      // differenza orologio server - locale
+const now = () => Date.now() + skew;
 
 /* Override da URL (utili per Browser Source diverse con la stessa regia) */
 const OVR = {};
@@ -645,6 +653,64 @@ function save() {
   if (FORCED_OBS) return;                       // la pagina OBS è passiva: legge soltanto
   try { localStorage.setItem(KEY, JSON.stringify(state)); }
   catch (e) { console.warn('Salvataggio non riuscito (spazio insufficiente?)', e); }
+  push();
+}
+
+/* =====================================================================
+   9b. SINCRONIZZAZIONE REMOTA (server Netlify)
+   La regia invia lo stato al server; OBS e altri dispositivi lo leggono
+   con polling. Funziona anche da remoto (telefono, altro PC, OBS).
+   ===================================================================== */
+let remoteAt = 0;          // updatedAt dell'ultimo stato noto dal server
+let dirty = false;         // modifiche locali non ancora inviate
+let pushing = false;
+let pushTimer = null;
+const stripOvr = s => { const o = { ...s }; for (const k in OVR) delete o[k]; return o; };
+function setSkew(serverNow, t0) { if (serverNow) skew = serverNow - Math.round((t0 + Date.now()) / 2); }
+function push() {
+  if (FORCED_OBS) return;
+  dirty = true;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(doPush, 120);           // raggruppa le modifiche ravvicinate (digitazione)
+}
+async function doPush() {
+  if (pushing) { pushTimer = setTimeout(doPush, 150); return; }
+  pushing = true; dirty = false;
+  const t0 = Date.now();
+  try {
+    const r = await fetch(API, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: stripOvr(state) }) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    remoteAt = Math.max(remoteAt, d.updatedAt); setSkew(d.now, t0);
+    setSync(true);
+  } catch (e) {
+    dirty = true; setSync(false);
+    pushTimer = setTimeout(doPush, 2000);        // riprova
+  } finally { pushing = false; }
+}
+async function pull() {
+  const t0 = Date.now();
+  try {
+    const r = await fetch(API + (remoteAt ? '&since=' + remoteAt : ''), { cache: 'no-store' });
+    setSync(r.ok);
+    if (r.status === 204) { setSkew(+r.headers.get('x-now'), t0); return; }
+    if (!r.ok) return;
+    const d = await r.json();
+    setSkew(d.now, t0);
+    if (!d.state) { if (!FORCED_OBS && !remoteAt) push(); return; }   // server vuoto: carica lo stato della regia
+    if (dirty || pushing || drag || d.updatedAt <= remoteAt) return;   // c'è una modifica locale più recente
+    remoteAt = d.updatedAt;
+    state = adopt(d.state);
+    if (!FORCED_OBS) { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (_) {} }
+    catchUpTimer(); syncPanel(); render();
+  } catch (e) { setSync(false); }
+}
+function pollLoop() {
+  pull().finally(() => setTimeout(pollLoop, document.hidden && !FORCED_OBS ? 4000 : (FORCED_OBS ? 600 : 1000)));
+}
+function setSync(ok) {
+  const n = el('syncState');
+  if (n) { n.textContent = ok ? '● Sincronizzato · stanza ' + ROOM : '● Non connesso al server'; n.style.color = ok ? '#3ecf6e' : '#ff5a5a'; }
 }
 function commit() { save(); render(); }
 
@@ -664,8 +730,8 @@ window.addEventListener('storage', e => {
 function catchUpTimer() {
   const t = state.timer;
   if (!t.running) return false;
-  const now = Date.now();
-  t.remaining -= now - t.ts; t.ts = now;
+  const n = now();
+  t.remaining -= n - t.ts; t.ts = n;
   if (t.remaining <= 0) { t.remaining = 0; t.running = false; return true; }
   return false;
 }
@@ -855,6 +921,7 @@ function setPath(o, p, v) { const ks = p.split('.'), last = ks.pop(); ks.reduce(
 
 function syncPanel() {
   $$('[data-field]').forEach(inp => {
+    if (inp === document.activeElement && inp.type !== 'checkbox') return;   // non disturbare chi sta scrivendo
     const v = getPath(state, inp.dataset.field);
     if (inp.type === 'checkbox') inp.checked = !!v; else inp.value = v ?? '';
   });
@@ -1001,7 +1068,7 @@ const ACTIONS = {
   posReset:  () => { state.pos = { x: 0, y: 0, anchor: 'top' }; },
   screenshot: () => { screenshot(); return false; },
 
-  timerStart: () => { if (state.timer.remaining > 0) { state.timer.running = true; state.timer.ts = Date.now(); } },
+  timerStart: () => { if (state.timer.remaining > 0) { state.timer.running = true; state.timer.ts = now(); } },
   timerStop:  () => { catchUpTimer(); state.timer.running = false; },
   timerReset: () => { state.timer.running = false; state.timer.remaining = state.timer.preset; },
   timerSet:   () => { setTimer((clamp(+el('tMin').value || 0, 0, 99) * 60 + clamp(+el('tSec').value || 0, 0, 59)) * 1000); syncPanel(); },
@@ -1026,7 +1093,7 @@ const ACTIONS = {
   togglePanel: () => { document.body.classList.toggle('panel-open'); fit(); return false; },
   obsMode:     () => { document.body.classList.add('obs'); document.body.classList.remove('panel-open'); fit(); return false; },
   copyUrl: () => {
-    const url = location.origin + location.pathname + '?obs=true';
+    const url = (ORIGIN || location.origin + location.pathname) + (ORIGIN ? '/' : '') + '?obs=true' + (ROOM !== 'main' ? '&room=' + ROOM : '');
     (navigator.clipboard?.writeText(url) || Promise.reject()).catch(() => prompt('Copia questo URL:', url));
     return false;
   }
@@ -1077,7 +1144,8 @@ addEventListener('resize', fit);
   render();
   fit();
   loop();
-  addEventListener('beforeunload', save);
+  pollLoop();
+  addEventListener('beforeunload', () => { if (!FORCED_OBS) try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (_) {} });
 })();
 
 })();
