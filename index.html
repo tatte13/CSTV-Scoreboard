@@ -645,8 +645,62 @@ function save() {
   if (FORCED_OBS) return;                       // la pagina OBS è passiva: legge soltanto
   try { localStorage.setItem(KEY, JSON.stringify(state)); }
   catch (e) { console.warn('Salvataggio non riuscito (spazio insufficiente?)', e); }
+  schedulePush();
 }
 function commit() { save(); render(); }
+
+/* =====================================================================
+   9b. SINCRONIZZAZIONE ONLINE (pannello → server → OBS su qualsiasi PC)
+   Il pannello invia lo stato a /api/state; la pagina OBS lo legge in polling.
+   Tabelloni diversi: aggiungere ?board=nome sia al pannello sia all'URL OBS.
+   ===================================================================== */
+const BOARD = (params.get('board') || 'main').slice(0, 64);
+const API   = '/api/state?board=' + encodeURIComponent(BOARD);
+let remoteVersion = 0, pushTimer = null, pushing = false, pushAgain = false;
+
+function schedulePush() {
+  if (FORCED_OBS) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(push, 120);
+}
+async function push() {
+  pushTimer = null;
+  if (pushing) { pushAgain = true; return; }
+  pushing = true;
+  try {
+    const r = await fetch(API, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state, clientNow: Date.now() })
+    });
+    if (r.ok) remoteVersion = (await r.json()).version;
+  } catch (e) { console.warn('Sincronizzazione non riuscita', e); }
+  pushing = false;
+  if (pushAgain) { pushAgain = false; push(); }
+}
+async function pull() {
+  if (pushTimer || pushing) return;                 // modifiche locali in uscita: hanno la precedenza
+  try {
+    const r = await fetch(API + '&since=' + remoteVersion, { cache: 'no-store' });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.state || d.version === remoteVersion || pushTimer || pushing) return;
+    remoteVersion = d.version;
+    const raw = d.state;
+    if (raw.timer && typeof raw.timer.ts === 'number') raw.timer.ts -= d.now - Date.now();  // orologio server → locale
+    state = adopt(raw);
+    catchUpTimer();
+    if (!FORCED_OBS) { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (_) {} syncPanel(); }
+    render();
+  } catch (e) { /* rete assente: riprova al prossimo giro */ }
+}
+async function startSync() {
+  if (!FORCED_OBS) {
+    await pull();                                   // il pannello riprende lo stato online, se esiste
+    if (!remoteVersion) push();                     // altrimenti pubblica quello locale
+  }
+  const every = FORCED_OBS ? 500 : 2000;
+  (function again() { setTimeout(() => pull().finally(again), every); })();
+}
 
 /* Sincronizzazione tra schede/finestre (stessa origine e stesso browser, es. OBS Custom Dock) */
 window.addEventListener('storage', e => {
@@ -1026,7 +1080,7 @@ const ACTIONS = {
   togglePanel: () => { document.body.classList.toggle('panel-open'); fit(); return false; },
   obsMode:     () => { document.body.classList.add('obs'); document.body.classList.remove('panel-open'); fit(); return false; },
   copyUrl: () => {
-    const url = location.origin + location.pathname + '?obs=true';
+    const url = location.origin + location.pathname + '?obs=true' + (BOARD !== 'main' ? '&board=' + encodeURIComponent(BOARD) : '');
     (navigator.clipboard?.writeText(url) || Promise.reject()).catch(() => prompt('Copia questo URL:', url));
     return false;
   }
@@ -1077,6 +1131,7 @@ addEventListener('resize', fit);
   render();
   fit();
   loop();
+  startSync();
   addEventListener('beforeunload', save);
 })();
 
