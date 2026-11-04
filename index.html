@@ -582,7 +582,9 @@ const LITE       = truthy('lite');                 // ?lite=1 → niente effetti
 const KEY        = 'cestistica.scoreboard.v1';
 /* Stanza di sincronizzazione remota (?room=nome): regia e OBS devono usare la stessa */
 const ROOM       = ((params.get('room') || 'main').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 40)) || 'main';
-const API        = '/api/state?room=' + encodeURIComponent(ROOM);
+/* Se la pagina è aperta da file locale o da un altro dominio, usa comunque il server Netlify */
+const ORIGIN     = /netlify\.app$|^localhost$|^127\./.test(location.hostname) ? '' : 'https://cstvscoreboard.netlify.app';
+const API        = ORIGIN + '/api/state?room=' + encodeURIComponent(ROOM);
 let skew = 0;                                      // differenza orologio server - locale
 const now = () => Date.now() + skew;
 
@@ -704,7 +706,7 @@ async function pull() {
   } catch (e) { setSync(false); }
 }
 function pollLoop() {
-  pull().finally(() => setTimeout(pollLoop, document.hidden && !FORCED_OBS ? 5000 : (FORCED_OBS ? 700 : 1500)));
+  pull().finally(() => setTimeout(pollLoop, document.hidden && !FORCED_OBS ? 4000 : (FORCED_OBS ? 600 : 1000)));
 }
 function setSync(ok) {
   const n = el('syncState');
@@ -1091,7 +1093,7 @@ const ACTIONS = {
   togglePanel: () => { document.body.classList.toggle('panel-open'); fit(); return false; },
   obsMode:     () => { document.body.classList.add('obs'); document.body.classList.remove('panel-open'); fit(); return false; },
   copyUrl: () => {
-    const url = location.origin + location.pathname + '?obs=true' + (ROOM !== 'main' ? '&room=' + ROOM : '');
+    const url = (ORIGIN || location.origin + location.pathname) + (ORIGIN ? '/' : '') + '?obs=true' + (ROOM !== 'main' ? '&room=' + ROOM : '');
     (navigator.clipboard?.writeText(url) || Promise.reject()).catch(() => prompt('Copia questo URL:', url));
     return false;
   }
